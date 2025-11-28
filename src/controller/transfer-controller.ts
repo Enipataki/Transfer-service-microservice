@@ -263,7 +263,7 @@ export class TransferController {
 
     async healthCheck(req: Request, res: Response) {
         try {
-            logger.info('Health checl requested');
+            logger.info('Health check requested');
 
             res.status(200).json({
                 success: true,

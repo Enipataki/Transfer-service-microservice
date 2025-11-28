@@ -1,7 +1,7 @@
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
-import transferRoutes from './routes/transfer-routes';
+import {transferRoutes} from './routes/transfer-routes';
 import {logger} from './services/logger-service';
 import {env} from './config/environment'
 
@@ -87,7 +87,7 @@ class TransferServer{
      */
     private initializeRoutes() {
         //Transfer routes
-        this.app.use('/api/v1/transfers', transferRoutes);
+        this.app.use('/api/v1/transfers', transferRoutes.getRouter());
 
         //Root endpoint
         this.app.get('/', (req: express.Request, res: express.Response) => {
@@ -102,8 +102,8 @@ class TransferServer{
                 }
             })
         });
-        //404 handler for undefined routes
-        this.app.use('*', (req: express.Request, res: express.Response) => {
+       // 404 handler for undefined routes - use a function instead of '*'
+        this.app.use((req: express.Request, res: express.Response) => {
             logger.warn('Route not found', {
                 method: req.method,
                 url: req.originalUrl

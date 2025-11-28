@@ -1,0 +1,8 @@
+{"environment":"development","level":"info","message":"Transfer service started successfully","nodeVersion":"v22.14.0","port":3000,"service":"transfer-service","timestamp":"2025-11-27T19:49:42.183Z"}
+{"environment":"development","level":"info","message":"Transfer service started successfully","nodeVersion":"v22.14.0","port":3000,"service":"transfer-service","timestamp":"2025-11-27T19:57:44.105Z"}
+{"level":"info","message":"Health check requested","service":"transfer-service","timestamp":"2025-11-27T19:58:20.456Z"}
+{"duration":"12ms","ip":"::1","level":"info","message":"HTTp Request","method":"GET","service":"transfer-service","status":200,"timestamp":"2025-11-27T19:58:20.468Z","url":"/health","userAgents":"PostmanRuntime/7.48.0"}
+{"environment":"development","level":"info","message":"Transfer service started successfully","nodeVersion":"v22.14.0","port":3000,"service":"transfer-service","timestamp":"2025-11-27T20:01:43.209Z"}
+{"environment":"development","level":"info","message":"Transfer service started successfully","nodeVersion":"v22.14.0","port":3000,"service":"transfer-service","timestamp":"2025-11-27T20:04:33.393Z"}
+{"environment":"development","level":"info","message":"Transfer service started successfully","nodeVersion":"v22.14.0","port":3000,"service":"transfer-service","timestamp":"2025-11-27T20:07:40.961Z"}
+{"environment":"development","level":"info","message":"Transfer service started successfully","nodeVersion":"v22.14.0","port":3000,"service":"transfer-service","timestamp":"2025-11-27T20:09:59.044Z"}
