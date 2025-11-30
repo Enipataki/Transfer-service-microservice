@@ -28,7 +28,7 @@ class TransferServer{
 
         res.on('finish', () => {
             const duration = Date.now() - start;
-            logger.info('HTTp Request', {
+            logger.info('HTTP Request', {
                 method: req.method,
                 url: req.url,
                 status: res.statusCode,
@@ -140,6 +140,7 @@ class TransferServer{
                 Transfer service is runnig! 
                 Port: ${this.port}
                 Environment: ${env.NODE_ENV}
+                redis: Redis running on ${env.REDIS_URL}
                 API Documentation: http://localhost:${this.port}/api/v1/transfers/health
             `);
         });

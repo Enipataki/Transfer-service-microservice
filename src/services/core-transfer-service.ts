@@ -81,7 +81,7 @@ export class TransferService {
 
         const query = `
         insert INTO recurring_transfers (
-        id, reference, sender_account_id, recipient_account_id, recipient_bank_coode, recipient_name, recipient_account_number, amount, currency, frequency, next_execution, end_date, status
+        id, reference, sender_account_id, recipient_account_id, recipient_bank_code, recipient_name, recipient_account_number, amount, currency, frequency, next_execution, end_date, status
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         RETURNING *
