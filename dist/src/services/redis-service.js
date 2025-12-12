@@ -18,6 +18,12 @@ const environment_1 = require("../config/environment");
 class RedisService {
     constructor() {
         this.client = new ioredis_1.default(environment_1.env.REDIS_URL);
+        this.client.on('connect', () => {
+            console.log('Redis connected successfully');
+        });
+        this.client.on('error', (error) => {
+            console.log("Redis connection error", error);
+        });
     }
     set(key, value, expiry) {
         return __awaiter(this, void 0, void 0, function* () {
@@ -28,6 +34,25 @@ class RedisService {
             else {
                 yield this.client.set(key, stringValue);
             }
+        });
+    }
+    //Advanced set with Redis options (NX, EX, etc.)
+    setWithOptions(key, value, mode, //NX = only set if not exists, XX = only set if exists
+    expiryTime, // Expiration in seconds
+    expireMode //EX = seconds, PX = millisecond
+    ) {
+        return __awaiter(this, void 0, void 0, function* () {
+            const stringValue = JSON.stringify(value);
+            const args = [key, stringValue];
+            if (mode)
+                args.push(mode);
+            if (expiryTime && expireMode) {
+                args.push(expireMode);
+                args.push(expiryTime);
+            }
+            //Returns 'ok' if successfull, null if NX failed
+            const result = yield this.client.set(...args);
+            return result;
         });
     }
     get(key) {
@@ -41,11 +66,36 @@ class RedisService {
             yield this.client.del(key);
         });
     }
+    delMultiple(keys) {
+        return __awaiter(this, void 0, void 0, function* () {
+            if (keys.length > 0) {
+                yield this.client.del(...keys);
+            }
+        });
+    }
     exists(key) {
         return __awaiter(this, void 0, void 0, function* () {
             const result = yield this.client.exists(key);
             return result === 1;
         });
+    }
+    keys(pattern) {
+        return __awaiter(this, void 0, void 0, function* () {
+            return yield this.client.keys(pattern);
+        });
+    }
+    ttl(key) {
+        return __awaiter(this, void 0, void 0, function* () {
+            return yield this.client.ttl(key);
+        });
+    }
+    //pipelime for batch operations
+    pipeline() {
+        return this.client.pipeline();
+    }
+    //Get the raw Redis client for advanced operations
+    getClient() {
+        return this.client;
     }
 }
 exports.RedisService = RedisService;

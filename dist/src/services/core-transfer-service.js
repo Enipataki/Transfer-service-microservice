@@ -12,13 +12,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.transferService = exports.TransferService = void 0;
 const uuid_1 = require("uuid");
 const database_service_1 = require("./database-service");
-const redis_service_1 = require("./redis-service");
 const logger_service_1 = require("./logger-service");
 const account_service_mock_1 = require("../mock-data/account-service-mock");
 const transaction_service_mock_1 = require("../mock-data/transaction-service-mock");
 const notification_service_mock_1 = require("../mock-data/notification-service-mock");
 const payment_rail_service_mock_1 = require("../mock-data/payment-rail-service-mock");
 const limit_service_mock_1 = require("../mock-data/limit-service-mock");
+const single_transfer_queue_1 = require("../queues/single-transfer-queue");
 /**
  * Core Transfer Service
  * Handles all transfer operations including:
@@ -119,7 +119,7 @@ class TransferService {
         SET status = 'FAILED',
         failure_reason = $1,
         updated_at = CURRENT_TIMESTAMP
-        WHERE id = 2
+        WHERE id = $2
         `;
             yield database_service_1.db.query(query, [reason, transferId]);
             //Refund if already debited
@@ -184,7 +184,7 @@ class TransferService {
     validateTransfer(input, transactionType) {
         return __awaiter(this, void 0, void 0, function* () {
             //check transaction limits
-            yield this.limitService.validateTransferLimits({ userId: input.senderAccountId, amount: input.amount, currency: input.currency, transactionType: transactionType, recipientType: input.type });
+            //await this.limitService.validateTransferLimits({userId: input.senderAccountId, amount: input.amount, currency: input.currency, transactionType: transactionType, recipientType: input.type});
             //validate recipient account for intra-bank
             if (input.type === "INTRA_BANK" && input.recipientAccountId) {
                 const isValid = yield this.accountService.validateAccounts(input.senderAccountId, input.recipientAccountId);
@@ -194,18 +194,6 @@ class TransferService {
             }
             //Additional compliance checks
             yield this.performComplianceChecks(input);
-        });
-    }
-    //Idempotency management
-    checkIdempotency(key) {
-        return __awaiter(this, void 0, void 0, function* () {
-            return yield redis_service_1.redis.get(`idempotency:${key}`);
-        });
-    }
-    storeIdempotency(key, data) {
-        return __awaiter(this, void 0, void 0, function* () {
-            //store for 24 hours yp prevent duplicates
-            yield redis_service_1.redis.set(`idempotency:${key}`, data, 86400);
         });
     }
     //calculate transfer fee based on type and amount
@@ -262,10 +250,11 @@ class TransferService {
         });
     }
     //Queue operations to be implementef with BullMQ
-    queueTransferProcessing(trasnferId) {
+    queueTransferProcessing(transferId) {
         return __awaiter(this, void 0, void 0, function* () {
             //Implementation with BullMQ
-            logger_service_1.logger.info('Transfer queued for processing', { trasnferId });
+            yield single_transfer_queue_1.singleTransferQueue.addTransferJob(transferId);
+            logger_service_1.logger.info('Transfer queued for processing', { transferId });
         });
     }
     queueBulkTransferProcessing(bulkTransferId) {
@@ -282,7 +271,7 @@ class TransferService {
     }
     //Process a single transfer called by job processor
     // @params transferId ID of the transfer to process
-    processTranfer(transferId, externalReference) {
+    processTransfer(transferId, externalReference) {
         return __awaiter(this, void 0, void 0, function* () {
             try {
                 const transfer = yield this.getTransferById(transferId);
@@ -319,26 +308,14 @@ class TransferService {
     /**
      * Create a single transfer
      * @param input transfer creation data
-     * @paramm idempotencyKey unique key to prevent duplicate transfers
      * @returns created transfer record
      * @throws {Error} when validation fails, limits exceeded or insufficient funds
      */
-    createTransfer(input, idempotencyKey) {
+    createTransfer(input) {
         return __awaiter(this, void 0, void 0, function* () {
-            // Check idempotency to prevent duplicate transfers
-            if (idempotencyKey) {
-                const existingTransfer = yield this.checkIdempotency(idempotencyKey);
-                if (existingTransfer) {
-                    logger_service_1.logger.info('Idempotent transfer request detected, returning existing transfer', {
-                        idempotencyKey,
-                        transferId: existingTransfer.id
-                    });
-                    return existingTransfer;
-                }
-            }
             return yield database_service_1.db.transaction((client) => __awaiter(this, void 0, void 0, function* () {
                 // 1. Validate transfer limits and compliance
-                yield this.validateTransfer(input, 'bulk');
+                yield this.validateTransfer(input, 'single');
                 // 2. Calculate fees
                 const fee = yield this.calculateFee(input);
                 const totalAmount = input.amount + fee;
@@ -349,11 +326,7 @@ class TransferService {
                 }
                 // 4. Create transfer record
                 const transfer = yield this.createTransferRecord(input, fee, totalAmount, client);
-                // 5. Store idempotency key if provided
-                if (idempotencyKey) {
-                    yield this.storeIdempotency(idempotencyKey, transfer);
-                }
-                // 6. Process transfer asynchronously 
+                // 5. Process transfer asynchronously 
                 yield this.queueTransferProcessing(transfer.id);
                 logger_service_1.logger.info('Transfer created successfully', {
                     transferId: transfer.id,
@@ -368,28 +341,21 @@ class TransferService {
     /**
      * Create bulk transfers for multiple recipient
      * @params input Bulk transfer data
-     * @params idempotencyKey Unique key to prevent duplicate bulk transfers
      * @returns created bulk transfer record
      */
-    createdBulkTransfer(input, idempotencyKey) {
+    createBulkTransfer(input) {
         return __awaiter(this, void 0, void 0, function* () {
-            if (idempotencyKey) {
-                const existingBulkTransfer = yield this.checkIdempotency(idempotencyKey);
-                if (existingBulkTransfer) {
-                    return existingBulkTransfer;
-                }
-            }
             return yield database_service_1.db.transaction((client) => __awaiter(this, void 0, void 0, function* () {
                 const bulkTransferId = (0, uuid_1.v4)();
                 const bulkReference = `BULK-${Date.now()}`;
                 let totalAmount = 0;
                 let totalFee = 0;
-                const trasnfers = [];
+                const transfers = [];
                 //Process each transfer in the bulk request
                 for (const transferInput of input.transfers) {
                     const fullInput = Object.assign(Object.assign({}, transferInput), { senderAccountId: input.senderAccountId });
                     //Validate individual transfer
-                    yield this.validateTransfer(fullInput, 'single');
+                    yield this.validateTransfer(fullInput, 'bulk');
                     //calculate fees and totals
                     const fee = yield this.calculateFee(fullInput);
                     const transferTotal = fullInput.amount + fee;
@@ -397,7 +363,7 @@ class TransferService {
                     totalFee += fee;
                     //create transfer record
                     const transfer = yield this.createTransferRecord(fullInput, fee, transferTotal, client, bulkTransferId);
-                    trasnfers.push(transfer);
+                    transfers.push(transfer);
                 }
                 //check total balance requirement
                 const senderAccount = yield this.accountService.getAccount(input.senderAccountId);
@@ -405,13 +371,10 @@ class TransferService {
                     throw new Error('INSUFFICIENT_FUNDS');
                 }
                 //create bulk transfer record
-                const bulkTransfer = yield this.createBulkTransferRecord(bulkTransferId, bulkReference, input.senderAccountId, totalAmount, totalFee, trasnfers.length, trasnfers, client);
-                if (idempotencyKey) {
-                    yield this.storeIdempotency(idempotencyKey, bulkTransfer);
-                }
+                const bulkTransfer = yield this.createBulkTransferRecord(bulkTransferId, bulkReference, input.senderAccountId, totalAmount, totalFee, transfers.length, transfers, client);
                 //Queue bulk transfer processing
                 yield this.queueBulkTransferProcessing(bulkTransferId);
-                logger_service_1.logger.info('Bulk transfer created successfully', { bulkTransferId, reference: bulkReference, totaltransfers: trasnfers.length, totalAmount });
+                logger_service_1.logger.info('Bulk transfer created successfully', { bulkTransferId, reference: bulkReference, totaltransfers: transfers.length, totalAmount });
                 return bulkTransfer;
             }));
         });
@@ -425,7 +388,7 @@ class TransferService {
         return __awaiter(this, void 0, void 0, function* () {
             return yield database_service_1.db.transaction((client) => __awaiter(this, void 0, void 0, function* () {
                 //validate the recurring transfer
-                yield this.validateTransfer(Object.assign(Object.assign({}, input), { type: input.recipientBankCode ? 'INTERBANK' : 'INTRA_BANK' }), 'single');
+                yield this.validateTransfer(Object.assign(Object.assign({}, input), { type: input.recipientBankCode ? 'INTERBANK' : 'INTRA_BANK' }), 'recurring');
                 //calculate next execution
                 const nextExecution = this.calculateNextExecution(input.frequency);
                 //create recurring transfer record

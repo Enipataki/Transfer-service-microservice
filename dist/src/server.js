@@ -16,6 +16,7 @@ const express_1 = __importDefault(require("express"));
 const helmet_1 = __importDefault(require("helmet"));
 const cors_1 = __importDefault(require("cors"));
 const transfer_routes_1 = require("./routes/transfer-routes");
+const idempotency_middleware_1 = require("./middleware/idempotency-middleware");
 const logger_service_1 = require("./services/logger-service");
 const environment_1 = require("./config/environment");
 /**
@@ -71,9 +72,20 @@ class TransferServer {
             origin: true, // Allows ALL origins (use only in development)
             credentials: true,
             methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-            allowedHeaders: ["Content-Type", "Authorization", "X-Idempotency-Key"]
+            allowedHeaders: [
+                "Content-Type",
+                "Authorization",
+                "Idempotency-Key",
+            ],
+            exposedHeaders: [
+                "X-Idempotency-Replayed",
+                "X-Original-Request-Id"
+            ]
         };
         this.app.use((0, cors_1.default)(corsOptions));
+        //Idempotency middleware - critical placement
+        //Must be after body parsing but before routes
+        this.app.use(idempotency_middleware_1.IdempotencyMiddleware.handle);
         //Request logging middleware
         this.app.use(this.requestlogger);
     }
@@ -92,7 +104,12 @@ class TransferServer {
                     service: 'transfer-service',
                     version: '1.0.0',
                     status: 'operational',
-                    documentation: '/api/docs'
+                    documentation: '/api/docs',
+                    idempotency: {
+                        supported: true,
+                        header: 'Idempotency-Key',
+                        ttl: '24-hours'
+                    }
                 }
             });
         });

@@ -28,10 +28,8 @@ class TransferController {
             try {
                 // validate request body
                 const validatedData = validation_1.CreateTransferSchema.parse(req.body);
-                // Get idempotencyKey from header
-                const idempotencyKey = req.headers['idempotency-key'];
                 //create transfer 
-                const transfer = yield core_transfer_service_1.transferService.createTransfer(validatedData, idempotencyKey);
+                const transfer = yield core_transfer_service_1.transferService.createTransfer(validatedData);
                 logger_service_1.logger.info('Transfer creation successful', {
                     transferId: transfer.id, reference: transfer.reference
                 });
@@ -47,7 +45,8 @@ class TransferController {
                     body: req.body
                 });
                 if (error instanceof Error) {
-                    res.status(400).json({
+                    const statusCode = error.message === 'INSUFFICIENT_FUNDS' ? 422 : 400;
+                    res.status(statusCode).json({
                         success: false,
                         message: error.message,
                         data: null
@@ -72,10 +71,8 @@ class TransferController {
             try {
                 //validate request body
                 const validatedData = validation_1.CreateBulkTransferSchema.parse(req.body);
-                //get idemootency key from header
-                const idempotencyKey = req.headers['idempotency-key'];
                 //create bulk transfer
-                const bulkTransfer = yield core_transfer_service_1.transferService.createdBulkTransfer(validatedData, idempotencyKey);
+                const bulkTransfer = yield core_transfer_service_1.transferService.createBulkTransfer(validatedData);
                 logger_service_1.logger.info('Bulk transfer creation request successful', { bulkTransferId: bulkTransfer.id, transferCount: bulkTransfer.transferCount });
                 res.status(201).json({
                     success: true,

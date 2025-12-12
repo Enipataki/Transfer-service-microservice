@@ -2,8 +2,6 @@ import {Request, Response} from 'express';
 import {transferService} from "../services/core-transfer-service"
 import {CreateTransferSchema, CreateBulkTransferSchema, CreateRecurringTransferSchema} from '../utils/validation'
 import {logger} from '../services/logger-service';
-import { success } from 'zod';
-
 
 /**
  * Transfer controller
@@ -21,11 +19,9 @@ export class TransferController {
         try {
             // validate request body
             const validatedData = CreateTransferSchema.parse(req.body);
-            // Get idempotencyKey from header
-            const idempotencyKey = req.headers['idempotency-key'] as string;
 
             //create transfer 
-            const transfer = await transferService.createTransfer(validatedData, idempotencyKey);
+            const transfer = await transferService.createTransfer(validatedData);
 
             logger.info('Transfer creation successful', {
                 transferId: transfer.id, reference: transfer.reference
@@ -43,7 +39,8 @@ export class TransferController {
             });
 
             if (error instanceof Error) {
-                res.status(400).json({
+                const statusCode = error.message === 'INSUFFICIENT_FUNDS' ? 422 : 400;
+                res.status(statusCode).json({
                     success: false,
                     message: error.message,
                     data: null
@@ -67,11 +64,8 @@ export class TransferController {
             //validate request body
             const validatedData = CreateBulkTransferSchema.parse(req.body);
 
-            //get idemootency key from header
-            const idempotencyKey = req.headers['idempotency-key'] as string;
-
             //create bulk transfer
-            const bulkTransfer = await transferService.createdBulkTransfer(validatedData, idempotencyKey);
+            const bulkTransfer = await transferService.createBulkTransfer(validatedData);
 
             logger.info('Bulk transfer creation request successful', {bulkTransferId: bulkTransfer.id, transferCount: bulkTransfer.transferCount});
 

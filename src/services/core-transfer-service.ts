@@ -9,6 +9,7 @@ import {TransactionServiceMock, transactionServiceInstance} from "../mock-data/t
 import {NotificationServiceMock, notificationServicInstancee} from "../mock-data/notification-service-mock";
 import {paymentRailServiceInstance, PaymentRailServiceMock} from '../mock-data/payment-rail-service-mock'
 import {limitServiceInstance, LimitServiceMock} from '../mock-data/limit-service-mock'
+import { singleTransferQueue } from "../queues/single-transfer-queue";
 
 
 /**
@@ -127,7 +128,7 @@ export class TransferService {
         SET status = 'FAILED',
         failure_reason = $1,
         updated_at = CURRENT_TIMESTAMP
-        WHERE id = 2
+        WHERE id = $2
         `;
 
         await db.query(query, [reason, transferId]);
@@ -196,7 +197,7 @@ export class TransferService {
     // Validate transfer against business rule and compliance
     private async validateTransfer(input: CreateTransferInput, transactionType: 'single' | 'bulk' | 'recurring'): Promise<void> {
         //check transaction limits
-        await this.limitService.validateTransferLimits({userId: input.senderAccountId, amount: input.amount, currency: input.currency, transactionType: transactionType, recipientType: input.type});
+        //await this.limitService.validateTransferLimits({userId: input.senderAccountId, amount: input.amount, currency: input.currency, transactionType: transactionType, recipientType: input.type});
 
         //validate recipient account for intra-bank
         if(input.type === "INTRA_BANK" && input.recipientAccountId) {
@@ -210,17 +211,6 @@ export class TransferService {
         await this.performComplianceChecks(input)
     }
 
-
-
-    //Idempotency management
-    private async checkIdempotency(key: string): Promise<any> {
-        return await redis.get(`idempotency:${key}`);
-    }
-
-    private async storeIdempotency(key:string, data: any): Promise<void> {
-        //store for 24 hours yp prevent duplicates
-        await redis.set(`idempotency:${key}`, data, 86400)
-    }
 
     //calculate transfer fee based on type and amount
     private async calculateFee(input: CreateTransferInput): Promise<number> {
@@ -275,9 +265,11 @@ export class TransferService {
     }
 
     //Queue operations to be implementef with BullMQ
-    private async queueTransferProcessing(trasnferId: string): Promise<void> {
+    private async queueTransferProcessing(transferId: string): Promise<void> {
         //Implementation with BullMQ
-        logger.info('Transfer queued for processing', {trasnferId});
+        await singleTransferQueue.addTransferJob(transferId);
+
+        logger.info('Transfer queued for processing', {transferId});
     }
 
     private async queueBulkTransferProcessing(bulkTransferId: string): Promise<void> {
@@ -293,7 +285,7 @@ export class TransferService {
     //Process a single transfer called by job processor
     // @params transferId ID of the transfer to process
 
-    async processTranfer(transferId: string, externalReference: string): Promise<void> {
+    async processTransfer(transferId: string, externalReference?: string): Promise<void> {
         try {
             const transfer = await this.getTransferById(transferId);
             if (!transfer || transfer.status !== 'PENDING'){
@@ -310,7 +302,7 @@ export class TransferService {
                 success = await this.processIntraBankTransfer(transfer);
             } else {
                 // for interbank transfer- use payment rail
-                success = await this.processInterbankTransfer(transfer, externalReference)
+                success = await this.processInterbankTransfer(transfer, externalReference!)
             }
 
             if (success) {
@@ -327,27 +319,15 @@ export class TransferService {
     /**
      * Create a single transfer
      * @param input transfer creation data
-     * @paramm idempotencyKey unique key to prevent duplicate transfers
      * @returns created transfer record
      * @throws {Error} when validation fails, limits exceeded or insufficient funds
      */
 
-    async createTransfer(input: CreateTransferInput, idempotencyKey?: string): Promise<Transfer> {
-    // Check idempotency to prevent duplicate transfers
-    if (idempotencyKey) {
-        const existingTransfer = await this.checkIdempotency(idempotencyKey);
-        if (existingTransfer) {
-            logger.info('Idempotent transfer request detected, returning existing transfer', { 
-                idempotencyKey, 
-                transferId: existingTransfer.id 
-            });
-            return existingTransfer;
-        }
-    }
+    async createTransfer(input: CreateTransferInput): Promise<Transfer> {
 
     return await db.transaction(async (client) => {
         // 1. Validate transfer limits and compliance
-        await this.validateTransfer(input, 'bulk');
+        await this.validateTransfer(input, 'single');
 
         // 2. Calculate fees
         const fee = await this.calculateFee(input);
@@ -362,12 +342,7 @@ export class TransferService {
         // 4. Create transfer record
         const transfer = await this.createTransferRecord(input, fee, totalAmount, client);
 
-        // 5. Store idempotency key if provided
-        if (idempotencyKey) {
-            await this.storeIdempotency(idempotencyKey, transfer);
-        }
-
-        // 6. Process transfer asynchronously 
+        // 5. Process transfer asynchronously 
         await this.queueTransferProcessing(transfer.id);
 
         logger.info('Transfer created successfully', { 
@@ -384,24 +359,18 @@ export class TransferService {
 /**
  * Create bulk transfers for multiple recipient
  * @params input Bulk transfer data
- * @params idempotencyKey Unique key to prevent duplicate bulk transfers
  * @returns created bulk transfer record
  */
 
-async createdBulkTransfer(input: CreateBulkTransferInput, idempotencyKey?: string): Promise<BulkTransfer> {
-    if (idempotencyKey) {
-        const existingBulkTransfer = await this.checkIdempotency(idempotencyKey);
-        if (existingBulkTransfer) {
-            return existingBulkTransfer;
-        }
-    }
+async createBulkTransfer(input: CreateBulkTransferInput): Promise<BulkTransfer> {
+    
     return await db.transaction(async(client) => {
         const bulkTransferId = uuidv4();
         const bulkReference = `BULK-${Date.now()}`;
 
         let totalAmount = 0;
         let totalFee = 0;
-        const trasnfers: Transfer[] = [];
+        const transfers: Transfer[] = [];
 
         //Process each transfer in the bulk request
         for (const transferInput of input.transfers) {
@@ -409,7 +378,7 @@ async createdBulkTransfer(input: CreateBulkTransferInput, idempotencyKey?: strin
                 ...transferInput, senderAccountId: input.senderAccountId
             };
             //Validate individual transfer
-            await this.validateTransfer(fullInput, 'single');
+            await this.validateTransfer(fullInput, 'bulk');
             //calculate fees and totals
             const fee = await this.calculateFee(fullInput);
             const transferTotal = fullInput.amount + fee;
@@ -419,7 +388,7 @@ async createdBulkTransfer(input: CreateBulkTransferInput, idempotencyKey?: strin
             //create transfer record
             const transfer = await this.createTransferRecord(fullInput, fee, transferTotal, client, bulkTransferId);
 
-            trasnfers.push(transfer);
+            transfers.push(transfer);
         }
         //check total balance requirement
         const senderAccount = await this.accountService.getAccount(input.senderAccountId);
@@ -428,16 +397,12 @@ async createdBulkTransfer(input: CreateBulkTransferInput, idempotencyKey?: strin
         }
 
         //create bulk transfer record
-        const bulkTransfer = await this.createBulkTransferRecord(bulkTransferId, bulkReference, input.senderAccountId, totalAmount, totalFee, trasnfers.length, trasnfers, client);
-
-        if(idempotencyKey) {
-            await this.storeIdempotency(idempotencyKey, bulkTransfer);
-        }
+        const bulkTransfer = await this.createBulkTransferRecord(bulkTransferId, bulkReference, input.senderAccountId, totalAmount, totalFee, transfers.length, transfers, client);
 
         //Queue bulk transfer processing
         await this.queueBulkTransferProcessing(bulkTransferId);
 
-        logger.info('Bulk transfer created successfully', {bulkTransferId, reference: bulkReference, totaltransfers: trasnfers.length, totalAmount});
+        logger.info('Bulk transfer created successfully', {bulkTransferId, reference: bulkReference, totaltransfers: transfers.length, totalAmount});
 
         return bulkTransfer
     })
@@ -452,7 +417,7 @@ async createdBulkTransfer(input: CreateBulkTransferInput, idempotencyKey?: strin
 async createRecurringTransfer(input: CreateRecurringTransferInput): Promise<RecurringTransfer> {
     return await db.transaction(async(client) => {
         //validate the recurring transfer
-        await this.validateTransfer({...input, type: input.recipientBankCode? 'INTERBANK' : 'INTRA_BANK'}, 'single');
+        await this.validateTransfer({...input, type: input.recipientBankCode? 'INTERBANK' : 'INTRA_BANK'}, 'recurring');
 
         //calculate next execution
         const nextExecution = this.calculateNextExecution(input.frequency);

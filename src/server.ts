@@ -2,6 +2,7 @@ import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
 import {transferRoutes} from './routes/transfer-routes';
+import {IdempotencyMiddleware} from './middleware/idempotency-middleware'
 import {logger} from './services/logger-service';
 import {env} from './config/environment'
 
@@ -73,9 +74,20 @@ class TransferServer{
             origin: true, // Allows ALL origins (use only in development)
             credentials: true,
             methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-            allowedHeaders: ["Content-Type", "Authorization", "X-Idempotency-Key"]
+            allowedHeaders: [
+                "Content-Type", 
+                "Authorization",
+                "Idempotency-Key", 
+            ],
+            exposedHeaders: [
+                "X-Idempotency-Replayed",
+                "X-Original-Request-Id"
+            ]
         };
         this.app.use(cors(corsOptions))
+        //Idempotency middleware - critical placement
+        //Must be after body parsing but before routes
+        this.app.use(IdempotencyMiddleware.handle);
 
         //Request logging middleware
 
@@ -98,7 +110,12 @@ class TransferServer{
                     service: 'transfer-service',
                     version: '1.0.0',
                     status: 'operational',
-                    documentation: '/api/docs'
+                    documentation: '/api/docs',
+                    idempotency: {
+                        supported: true,
+                        header: 'Idempotency-Key',
+                        ttl: '24-hours'
+                    }
                 }
             })
         });
